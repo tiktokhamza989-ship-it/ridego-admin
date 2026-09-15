@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RideGo Multi-Admin Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              DEFAULT: '#FF6A00',
+              dark: '#E65100',
+              charcoal: '#1A1D20',
+              surface: '#0F1115'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+    import { getFirestore, doc, getDoc, collection, onSnapshot, updateDoc, increment, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAkF1VSJvXTWkuw_38H8tnjAKHYfAD0azc",
+      authDomain: "ridego-ce32c.firebaseapp.com",
+      projectId: "ridego-ce32c",
+      storageBucket: "ridego-ce32c.firebasestorage.app",
+      messagingSenderId: "487226296365",
+      appId: "1:487226296365:web:efccdba732eadcab0d50a4",
+      measurementId: "G-NLW3TXS9C7"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    let currentAdmin = null;
+    let unsubscribers = [];
+    window.driverStore = {};
+    window.currentWalletDriverId = null;
+
+    onAuthStateChanged(auth, async (user) => {
+      const authScreen = document.getElementById("auth-screen");
+      const appScreen = document.getElementById("app-screen");
+      const loadingScreen = document.getElementById("loading-screen");
+
+      if (!user) {
+        cleanupListeners();
+        loadingScreen.classList.add("hidden");
+        authScreen.classList.remove("hidden");
+        appScreen.classList.add("hidden");
+        return;
+      }
+
+      loadingScreen.classList.remove("hidden");
+      authScreen.classList.add("hidden");
+      appScreen.classList.add("hidden");
+
+      try {
+        let adminData = null;
+        const directDoc = await getDoc(doc(db, "admins", user.uid));
+        if (directDoc.exists()) {
+          adminData = directDoc.data();
+        } else {
+          const querySnap = await getDoc(doc(db, "admins", "zVh2ROpEiQdPa3tqAolcZltpoYY2"));
+          if (querySnap.exists()) adminData = querySnap.data();
+        }
+
+        if (user.email === "tiktokhamza989@gmail.com") {
+          currentAdmin = adminData || {
+            fullName: "Hamza Zia",
+            roleId: "SUPER_ADMIN",
+            assignedCityIds: "Isakhel",
+            status: "ACTIVE",
+            permissions: "*"
+          };
+          
+          document.getElementById("admin-name-display").innerText = currentAdmin.fullName || "Hamza Zia";
+          document.getElementById("admin-role-badge").innerText = currentAdmin.roleId || "SUPER_ADMIN";
+          document.getElementById("admin-city-badge").innerText = currentAdmin.assignedCityIds || "Isakhel";
+          
+          startRealtimeSync();
+          loadingScreen.classList.add("hidden");
+          appScreen.classList.remove("hidden");
+          return;
+        }
+
+        if (adminData && adminData.status === "ACTIVE") {
+          currentAdmin = adminData;
+          document.getElementById("admin-name-display").innerText = adminData.fullName || "Admin";
+          document.getElementById("admin-role-badge").innerText = adminData.roleId || "ADMIN";
+          document.getElementById("admin-city-badge").innerText = adminData.assignedCityIds || "Isakhel";
+          
+          startRealtimeSync();
+          loadingScreen.classList.add("hidden");
+          appScreen.classList.remove("hidden");
+          return;
+        }
+
+        await signOut(auth);
+        alert("Access Denied.");
+      } catch (err) {
+        console.error("Auth Gate Error:", err);
+        await signOut(auth);
+      }
+    });
+
+    window.handleLogin = async () => {
+      const email = document.getElementById("login-email").value.trim();
+      const pass = document.getElementById("login-password").value;
+      const errEl = document.getElementById("login-error");
+      const btn = document.getElementById("btn-login");
+
+      errEl.classList.add("hidden");
+      btn.disabled = true;
+      btn.innerText = "Verifying...";
+
+      try {
+        await signInWithEmailAndPassword(auth, email, pass);
+      } catch (err) {
+        errEl.innerText = err.message || "Invalid credentials.";
+        errEl.classList.remove("hidden");
+        btn.disabled = false;
+        btn.innerText = "Authorize & Enter";
+      }
+    };
+
+    window.handleLogout = async () => {
+      await signOut(auth);
+    };
+
+    function cleanupListeners() {
+      unsubscribers.forEach(unsub => unsub());
+      unsubscribers = [];
+    }
+
+    function startRealtimeSync() {
+      cleanupListeners();
+
+      // SOS Sync
+      const unsubSos = onSnapshot(collection(db, "sos_alerts"), (snap) => {
+        let activeCount = 0;
+        const list = document.getElementById("sos-list");
+        list.innerHTML = "";
+        
+        snap.forEach(docSnap => {
+          const s = docSnap.data();
+          if (s.status === "active") activeCount++;
+          
+          const alertBox = document.createElement("div");
+          alertBox.className = "p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-1";
+          alertBox.innerHTML = `
+            <div class="flex justify-between items-center">
+              <span class="text-xs font-black text-rose-700 uppercase tracking-wide">🚨 Emergency Alert</span>
+              <span class="text-[9px] bg-rose-200 text-rose-800 font-bold px-1.5 py-0.5 rounded">${s.status || 'Active'}</span>
+            </div>
+            <p class="text-xs font-semibold text-gray-800">Ride ID: <span class="font-mono text-slate-600">${s.rideId || 'N/A'}</span></p>
+            <p class="text-[11px] text-gray-500">Contact: ${s.phone || 'N/A'}</p>
+          `;
+          list.appendChild(alertBox);
+        });
+
+        if (activeCount === 0) {
+          list.innerHTML = `<div class="p-4 text-center text-xs text-gray-400">No active SOS alerts. Territory is secure.</div>`;
+        }
+        document.getElementById("stat-sos").innerText = activeCount;
+      });
+      unsubscribers.push(unsubSos);
+
+      // Fares Engine Sync
+      const unsubFares = onSnapshot(doc(db, "fares", "rates"), (docSnap) => {
+        if (docSnap.exists()) {
+          const f = docSnap.data();
+          document.getElementById("fare-bike-base").value = f.baseFare || "";
+          document.getElementById("fare-bike-km").value = f.bikePerKm || "";
+          document.getElementById("fare-rickshaw-base").value = f.rickshawBaseFare || "";
+          document.getElementById("fare-rickshaw-km").value = f.rickshawPerKm || "";
+          document.getElementById("fare-car-base").value = f.carBaseFare || "";
+          document.getElementById("fare-car-km").value = f.carPerKm || "";
+          document.getElementById("fare-commission").value = f.commissionRate || "";
+        }
+      });
+      unsubscribers.push(unsubFares);
+
+      // Drivers Sync with Live Wallet Balance
+      const unsubDrivers = onSnapshot(collection(db, "drivers"), (snap) => {
+        let total = 0, pending = 0;
+        const container = document.getElementById("drivers-list");
+        container.innerHTML = "";
+        window.driverStore = {};
+        
+        snap.forEach(docSnap => {
+          total++;
+          const d = docSnap.data();
+          d.id = docSnap.id;
+          window.driverStore[d.id] = d;
+
+          const isApproved = d.status === "approved";
+          const isPending = !d.status || d.status === "pending";
+          if (isPending) pending++;
+
+          const walletBal = Number(d.walletBalance || 0);
+
+          const card = document.createElement("div");
+          card.className = "bg-white p-3.5 rounded-xl border border-gray-100 shadow-sm flex flex-col gap-2.5";
+          card.innerHTML = `
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="font-bold text-gray-900 text-sm flex items-center gap-1.5">
+                  ${d.name || "Driver"}
+                  <span class="text-[9px] px-2 py-0.5 rounded-full font-bold uppercase ${isApproved ? 'bg-emerald-100 text-emerald-800' : isPending ? 'bg-amber-100 text-amber-800' : 'bg-rose-100 text-rose-800'}">
+                    ${d.status || 'pending'}
+                  </span>
+                </h3>
+                <p class="text-xs text-gray-500 mt-0.5">📞 ${d.phone || "N/A"} | 🛵 ${d.vehicleType || "Bike"}</p>
+                <p class="text-[11px] text-gray-400">Plate: <span class="font-semibold text-gray-600">${d.vehicleNumber || "N/A"}</span></p>
+                
+                <div class="mt-2 flex items-center gap-2">
+                  <span class="text-[11px] font-bold ${walletBal < 50 ? 'text-rose-600' : 'text-emerald-700'}">
+                    💰 Balance: PKR ${walletBal}
+                  </span>
+                  ${walletBal < 50 ? '<span class="text-[9px] bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded font-bold">Low Fuel</span>' : ''}
+                </div>
+              </div>
+              <div class="flex flex-col gap-1">
+                <button onclick="viewDriverDocs('${d.id}')" class="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold">
+                  <i class="fa-solid fa-file-lines mr-1 text-[#FF6A00]"></i> Docs
+                </button>
+                <button onclick="openWalletModal('${d.id}')" class="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold">
+                  <i class="fa-solid fa-wallet mr-1 text-emerald-600"></i> Top-up
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 pt-2 border-t border-gray-100">
+              <button onclick="updateDriverStatus('${d.id}', 'approved')" class="py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold">Approve</button>
+              <button onclick="updateDriverStatus('${d.id}', 'rejected')" class="py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold">Reject</button>
+            </div>
+          `;
+          container.appendChild(card);
+        });
+
+        document.getElementById("stat-drivers").innerText = total;
+        document.getElementById("stat-pending").innerText = pending;
+      });
+      unsubscribers.push(unsubDrivers);
+
+      // Rides Sync
+      const unsubRides = onSnapshot(collection(db, "rides"), (snap) => {
+        let count = 0;
+        snap.forEach(() => count++);
+        document.getElementById("stat-rides").innerText = count;
+      });
+      unsubscribers.push(unsubRides);
+
+      // Passengers Sync
+      const unsubPassengers = onSnapshot(collection(db, "passengers"), (snap) => {
+        let count = 0;
+        snap.forEach(() => count++);
+        document.getElementById("stat-passengers").innerText = count;
+      });
+      unsubscribers.push(unsubPassengers);
+
+      // Cities Sync
+      const unsubCities = onSnapshot(collection(db, "cities"), (snap) => {
+        const container = document.getElementById("cities-list");
+        container.innerHTML = "";
+        snap.forEach(docSnap => {
+          const c = docSnap.data();
+          const div = document.createElement("div");
+          div.className = "bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex justify-between items-center";
+          div.innerHTML = `
+            <div>
+              <p class="font-bold text-gray-800 text-sm">${c.cityName || "City"} (${c.district || "Territory"})</p>
+              <p class="text-[10px] text-gray-400">${c.province || "Punjab"}, ${c.country || "Pakistan"}</p>
+            </div>
+            <span class="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full uppercase">${c.status || "ACTIVE"}</span>
+          `;
+          container.appendChild(div);
+        });
+      });
+      unsubscribers.push(unsubCities);
+    }
+
+    // --- FARES ENGINE UPDATE ---
+    window.saveFaresEngine = async () => {
+      const btn = document.getElementById("btn-save-fares");
+      btn.innerText = "Updating Rates...";
+      btn.disabled = true;
+
+      try {
+        await updateDoc(doc(db, "fares", "rates"), {
+          baseFare: document.getElementById("fare-bike-base").value,
+          bikePerKm: document.getElementById("fare-bike-km").value,
+          rickshawBaseFare: document.getElementById("fare-rickshaw-base").value,
+          rickshawPerKm: document.getElementById("fare-rickshaw-km").value,
+          carBaseFare: document.getElementById("fare-car-base").value,
+          carPerKm: document.getElementById("fare-car-km").value,
+          commissionRate: document.getElementById("fare-commission").value
+        });
+        alert("Isakhel Fares Updated Live across Platform!");
+      } catch (e) {
+        alert("Failed to update fares: " + e.message);
+      }
+      btn.innerText = "Save Live Rates";
+      btn.disabled = false;
+    };
+
+    // --- DRIVER STATUS UPDATE ---
+    window.updateDriverStatus = async (id, status) => {
+      await updateDoc(doc(db, "drivers", id), { status });
+      closeDocsModal();
+    };
+
+    // --- WALLET TOP-UP FUNCTIONS ---
+    window.openWalletModal = (id) => {
+      const d = window.driverStore[id];
+      if (!d) return;
+      window.currentWalletDriverId = id;
+      document.getElementById("wallet-modal-driver-name").innerText = d.name || "Driver";
+      document.getElementById("wallet-modal-current-bal").innerText = `PKR ${d.walletBalance || 0}`;
+      document.getElementById("wallet-topup-amount").value = "500";
+      document.getElementById("wallet-topup-modal").classList.remove("hidden");
+    };
+
+    window.closeWalletModal = () => {
+      document.getElementById("wallet-topup-modal").classList.add("hidden");
+      window.currentWalletDriverId = null;
+    };
+
+    window.submitWalletTopup = async () => {
+      const amt = Number(document.getElementById("wallet-topup-amount").value);
+      const method = document.getElementById("wallet-topup-method").value;
+      const refId = document.getElementById("wallet-topup-ref").value.trim() || "CASH_COUNTER";
+
+      if (!amt || amt <= 0) {
+        alert("Please enter a valid amount.");
+        return;
+      }
+
+      const btn = document.getElementById("btn-submit-topup");
+      btn.innerText = "Crediting Wallet...";
+      btn.disabled = true;
+
+      try {
+        const driverRef = doc(db, "drivers", window.currentWalletDriverId);
+        await updateDoc(driverRef, {
+          walletBalance: increment(amt),
+          lastRechargeDate: serverTimestamp()
+        });
+
+        // Audit Trail
+        await addDoc(collection(db, "wallet_transactions"), {
+          driverId: window.currentWalletDriverId,
+          amount: amt,
+          method: method,
+          referenceId: refId,
+          processedBy: currentAdmin ? currentAdmin.fullName : "Super Admin",
+          timestamp: serverTimestamp()
+        });
+
+        alert(`Successfully credited PKR ${amt} to driver's balance!`);
+        closeWalletModal();
+      } catch (err) {
+        alert("Top-up failed: " + err.message);
+      }
+      btn.innerText = "Confirm & Credit Balance";
+      btn.disabled = false;
+    };
+
+    // --- DOCS MODAL ---
+    window.viewDriverDocs = (id) => {
+      const d = window.driverStore[id];
+      if (!d) return;
+
+      document.getElementById("modal-driver-name").innerText = d.name || "Driver Verification";
+      document.getElementById("modal-cnic-num").innerText = d.cnicNumber || "Not Provided";
+      document.getElementById("modal-license-num").innerText = d.licenseNumber || "Not Provided";
+
+      const cnicImg = document.getElementById("modal-cnic-img");
+      const licenseImg = document.getElementById("modal-license-img");
+      const selfieImg = document.getElementById("modal-selfie-img");
+
+      cnicImg.src = d.cnicPhoto || "https://via.placeholder.com/300x160?text=No+CNIC+Photo";
+      licenseImg.src = d.licensePhoto || "https://via.placeholder.com/300x160?text=No+License+Photo";
+      selfieImg.src = d.selfieWithCnic || "https://via.placeholder.com/300x160?text=No+Selfie";
+
+      document.getElementById("modal-btn-approve").onclick = () => window.updateDriverStatus(id, 'approved');
+      document.getElementById("modal-btn-reject").onclick = () => window.updateDriverStatus(id, 'rejected');
+
+      document.getElementById("driver-docs-modal").classList.remove("hidden");
+    };
+
+    window.closeDocsModal = () => {
+      document.getElementById("driver-docs-modal").classList.add("hidden");
+    };
+
+    window.switchTab = (tab) => {
+      const tabs = ['drivers', 'fares', 'sos', 'cities'];
+      tabs.forEach(t => {
+        document.getElementById(`tab-${t}-content`).classList.toggle("hidden", t !== tab);
+        const btn = document.getElementById(`btn-tab-${t}`);
+        if (btn) {
+          btn.className = t === tab 
+            ? "flex-1 pb-2 border-b-2 border-[#FF6A00] text-[#FF6A00] font-bold text-xs text-center" 
+            : "flex-1 pb-2 border-b-2 border-transparent text-gray-400 font-medium text-xs text-center";
+        }
+      });
+    };
+  </script>
+</head>
+<body class="bg-slate-100 min-h-screen font-sans text-slate-800">
+
+  <div id="loading-screen" class="fixed inset-0 bg-[#0F1115] z-50 flex items-center justify-center">
+    <div class="flex flex-col items-center gap-3">
+      <div class="h-10 w-10 animate-spin rounded-full border-4 border-[#FF6A00] border-t-transparent"></div>
+      <p class="text-xs font-semibold tracking-wider text-slate-400 uppercase">Validating Security Tokens...</p>
+    </div>
+  </div>
+
+  <div id="auth-screen" class="fixed inset-0 bg-[#0F1115] z-40 flex items-center justify-center p-4 hidden">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl space-y-4">
+      <div class="text-center space-y-1">
+        <h1 class="text-2xl font-black text-gray-900 tracking-tight flex items-center justify-center gap-1.5">
+          Ride<span class="text-[#FF6A00]">Go</span>
+        </h1>
+        <p class="text-[11px] text-gray-400 uppercase font-bold tracking-wider">Super Admin Security Portal</p>
+      </div>
+
+      <div id="login-error" class="bg-rose-50 border border-rose-200 text-rose-600 text-xs p-2.5 rounded-lg hidden font-medium"></div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-[11px] font-bold text-gray-600 uppercase">Admin Email</label>
+          <input id="login-email" type="email" placeholder="tiktokhamza989@gmail.com" class="w-full mt-1 p-2.5 bg-slate-50 border border-gray-200 rounded-xl text-xs font-semibold focus:outline-[#FF6A00]" />
+        </div>
+        <div>
+          <label class="text-[11px] font-bold text-gray-600 uppercase">Password</label>
+          <input id="login-password" type="password" placeholder="••••••••" class="w-full mt-1 p-2.5 bg-slate-50 border border-gray-200 rounded-xl text-xs font-semibold focus:outline-[#FF6A00]" />
+        </div>
+        <button id="btn-login" onclick="handleLogin()" class="w-full py-3 bg-[#FF6A00] hover:bg-[#E65100] text-white font-bold rounded-xl text-xs shadow-md transition-all">
+          Authorize & Enter
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app-screen" class="hidden pb-12">
+    <div class="bg-[#1A1D20] text-white px-4 py-3 shadow-md sticky top-0 z-30 flex justify-between items-center">
+      <div class="flex items-center gap-2">
+        <h1 class="text-lg font-black tracking-tight">Ride<span class="text-[#FF6A00]">Go</span></h1>
+        <span id="admin-city-badge" class="text-[9px] bg-slate-800 text-slate-300 font-bold px-2 py-0.5 rounded uppercase border border-slate-700">Isakhel</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <div class="text-right">
+          <p id="admin-name-display" class="text-xs font-bold leading-none text-white"></p>
+          <span id="admin-role-badge" class="text-[9px] text-[#FF6A00] font-bold tracking-wider uppercase"></span>
+        </div>
+        <button onclick="handleLogout()" class="h-8 w-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+          <i class="fa-solid fa-arrow-right-from-bracket text-xs"></i>
+        </button>
+      </div>
+    </div>
+
+    <div class="p-4 max-w-lg mx-auto space-y-4">
+      <!-- Top Metrics -->
+      <div class="grid grid-cols-5 gap-1.5">
+        <div class="bg-white p-2 rounded-xl border border-gray-100 shadow-sm text-center">
+          <p class="text-[8px] text-gray-400 font-semibold uppercase">Drivers</p>
+          <p id="stat-drivers" class="text-sm font-black text-gray-800">0</p>
+        </div>
+        <div class="bg-white p-2 rounded-xl border border-gray-100 shadow-sm text-center">
+          <p class="text-[8px] text-amber-500 font-bold uppercase">Pending</p>
+          <p id="stat-pending" class="text-sm font-black text-amber-600">0</p>
+        </div>
+        <div class="bg-white p-2 rounded-xl border border-gray-100 shadow-sm text-center">
+          <p class="text-[8px] text-blue-500 font-bold uppercase">Rides</p>
+          <p id="stat-rides" class="text-sm font-black text-blue-600">0</p>
+        </div>
+        <div class="bg-white p-2 rounded-xl border border-gray-100 shadow-sm text-center">
+          <p class="text-[8px] text-rose-500 font-bold uppercase">SOS</p>
+          <p id="stat-sos" class="text-sm font-black text-rose-600">0</p>
+        </div>
+        <div class="bg-white p-2 rounded-xl border border-gray-100 shadow-sm text-center">
+          <p class="text-[8px] text-gray-400 font-semibold uppercase">Users</p>
+          <p id="stat-passengers" class="text-sm font-black text-gray-800">0</p>
+        </div>
+      </div>
+
+      <!-- Navigation Bar -->
+      <div class="flex border-b border-gray-200">
+        <button id="btn-tab-drivers" onclick="switchTab('drivers')" class="flex-1 pb-2 border-b-2 border-[#FF6A00] text-[#FF6A00] font-bold text-xs text-center">
+          Drivers
+        </button>
+        <button id="btn-tab-fares" onclick="switchTab('fares')" class="flex-1 pb-2 border-b-2 border-transparent text-gray-400 font-medium text-xs text-center">
+          Fares
+        </button>
+        <button id="btn-tab-sos" onclick="switchTab('sos')" class="flex-1 pb-2 border-b-2 border-transparent text-gray-400 font-medium text-xs text-center">
+          SOS Alerts
+        </button>
+        <button id="btn-tab-cities" onclick="switchTab('cities')" class="flex-1 pb-2 border-b-2 border-transparent text-gray-400 font-medium text-xs text-center">
+          Cities
+        </button>
+      </div>
+
+      <!-- Drivers Tab -->
+      <div id="tab-drivers-content" class="space-y-2.5">
+        <div id="drivers-list" class="space-y-2.5"></div>
+      </div>
+
+      <!-- Fares Tab -->
+      <div id="tab-fares-content" class="space-y-3 hidden">
+        <div class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm space-y-3">
+          <div class="border-b pb-2">
+            <h4 class="font-bold text-xs text-gray-800 uppercase tracking-wide">🛵 Bike Rates (PKR)</h4>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label class="text-[10px] text-gray-500">Base Fare</label>
+                <input id="fare-bike-base" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500">Per KM Rate</label>
+                <input id="fare-bike-km" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+            </div>
+          </div>
+
+          <div class="border-b pb-2">
+            <h4 class="font-bold text-xs text-gray-800 uppercase tracking-wide">🛺 Rickshaw Rates (PKR)</h4>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label class="text-[10px] text-gray-500">Base Fare</label>
+                <input id="fare-rickshaw-base" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500">Per KM Rate</label>
+                <input id="fare-rickshaw-km" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+            </div>
+          </div>
+
+          <div class="border-b pb-2">
+            <h4 class="font-bold text-xs text-gray-800 uppercase tracking-wide">🚗 Car Rates (PKR)</h4>
+            <div class="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label class="text-[10px] text-gray-500">Base Fare</label>
+                <input id="fare-car-base" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+              <div>
+                <label class="text-[10px] text-gray-500">Per KM Rate</label>
+                <input id="fare-car-km" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="text-[10px] text-gray-500">Platform Commission (%)</label>
+            <input id="fare-commission" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs font-bold" />
+          </div>
+
+          <button id="btn-save-fares" onclick="saveFaresEngine()" class="w-full py-2.5 bg-[#FF6A00] text-white rounded-xl font-bold text-xs shadow mt-2">
+            Save Live Rates
+          </button>
+        </div>
+      </div>
+
+      <!-- SOS Tab -->
+      <div id="tab-sos-content" class="space-y-2 hidden">
+        <div id="sos-list" class="space-y-2"></div>
+      </div>
+
+      <!-- Cities Tab -->
+      <div id="tab-cities-content" class="space-y-2 hidden">
+        <div id="cities-list" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WALLET TOP-UP MODAL -->
+  <div id="wallet-topup-modal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white w-full max-w-sm rounded-2xl p-5 space-y-4">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 class="font-black text-sm text-gray-900">Recharge Driver Balance</h3>
+        <button onclick="closeWalletModal()" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div class="p-2.5 bg-slate-50 rounded-xl flex justify-between items-center border">
+          <span class="font-bold text-gray-600" id="wallet-modal-driver-name">Driver</span>
+          <span class="font-black text-emerald-600" id="wallet-modal-current-bal">PKR 0</span>
+        </div>
+
+        <div>
+          <label class="font-bold text-gray-600 uppercase text-[10px]">Recharge Amount (PKR)</label>
+          <input id="wallet-topup-amount" type="number" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg font-bold text-sm" placeholder="500" />
+        </div>
+
+        <div>
+          <label class="font-bold text-gray-600 uppercase text-[10px]">Payment Source</label>
+          <select id="wallet-topup-method" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg font-semibold text-xs">
+            <option value="JazzCash">JazzCash Manual Transfer</option>
+            <option value="EasyPaisa">EasyPaisa Manual Transfer</option>
+            <option value="Cash">Cash Deposit at Isakhel Counter</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="font-bold text-gray-600 uppercase text-[10px]">Transaction ID / Receipt #</label>
+          <input id="wallet-topup-ref" type="text" class="w-full mt-1 p-2 bg-slate-50 border rounded-lg text-xs" placeholder="e.g. TID-9823412" />
+        </div>
+      </div>
+
+      <button id="btn-submit-topup" onclick="submitWalletTopup()" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow">
+        Confirm & Credit Balance
+      </button>
+    </div>
+  </div>
+
+  <!-- DRIVER DOCS MODAL -->
+  <div id="driver-docs-modal" class="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white w-full max-w-md rounded-2xl p-5 max-h-[90vh] overflow-y-auto space-y-4">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 id="modal-driver-name" class="font-black text-sm text-gray-900"></h3>
+        <button onclick="closeDocsModal()" class="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <p class="font-bold text-gray-700 mb-1">CNIC Number: <span id="modal-cnic-num" class="text-[#FF6A00]"></span></p>
+          <img id="modal-cnic-img" class="w-full h-36 object-cover rounded-lg border border-gray-200 bg-gray-50" />
+        </div>
+
+        <div>
+          <p class="font-bold text-gray-700 mb-1">License Number: <span id="modal-license-num" class="text-[#FF6A00]"></span></p>
+          <img id="modal-license-img" class="w-full h-36 object-cover rounded-lg border border-gray-200 bg-gray-50" />
+        </div>
+
+        <div>
+          <p class="font-bold text-gray-700 mb-1">Selfie with CNIC:</p>
+          <img id="modal-selfie-img" class="w-full h-36 object-cover rounded-lg border border-gray-200 bg-gray-50" />
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2 pt-2 border-t">
+        <button id="modal-btn-approve" class="py-2 bg-emerald-600 text-white rounded-xl font-bold text-xs shadow">Approve</button>
+        <button id="modal-btn-reject" class="py-2 bg-rose-600 text-white rounded-xl font-bold text-xs shadow">Reject</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
